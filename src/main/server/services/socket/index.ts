@@ -17,9 +17,15 @@ import { ChatRepository } from "@server/databases/chat";
 import { generateChatTitle, generateUuid } from "@renderer/helpers/utils";
 
 import { GetChatsParams, GetChatMessagesParams, GetAttachmentChunkParams, AttachmentChunkParams } from "./types";
+import { Handle } from "@server/databases/chat/entity";
+
+import * as fs from 'fs';
+const { writeFile, mkdir } = fs.promises;
 
 export class SocketService {
     db: Connection;
+
+    chatRepo: ChatRepository;
 
     server: SocketIOClient.Socket;
 
@@ -35,8 +41,9 @@ export class SocketService {
      * @param configRepo The app's settings repository
      * @param fs The filesystem class handler
      */
-    constructor(db: Connection) {
+    constructor(db: Connection, chatRepo: ChatRepository) {
         this.db = db;
+        this.chatRepo = chatRepo;
 
         this.server = null;
     }
@@ -65,6 +72,8 @@ export class SocketService {
             console.error("Setup has not been completed!");
             return false;
         }
+
+        //await this.syncContactAvatars();
 
         return new Promise((resolve, reject) => {
             const address = Server().configRepo.get("serverAddress") as string;
@@ -110,6 +119,28 @@ export class SocketService {
         });
     }
 
+    // this should probably be synced when contacts are synced
+    async syncContactAvatars(): Promise<void> {
+        try {
+            const handles = await this.chatRepo.getHandles();
+            await mkdir(path.join(FileSystem.resources, 'contacts'), { recursive: true });
+            for (let i = 0; i < handles.length; i += 1) {
+                let handle = handles[i];
+
+                // null check; if no handle/avatar, then skip
+                if (handle === null || handle === undefined || handle.avatar === null || handle.avatar === undefined)
+                    continue;
+
+                let avatar = handle.avatar.replace(/^data:image\/jpeg;base64,/, "");
+                let avatarPath = path.join(FileSystem.resources, 'contacts', `${handle.ROWID}.jpeg`);
+                await writeFile(avatarPath, avatar, { encoding: 'base64', flag: 'w' });
+            }
+        }
+        catch (err) {
+            console.error(`Error downloading contact avatars: ${err}`);
+        }
+    }
+
     startSocketHandlers() {
         if (!this.server) return;
 
@@ -137,12 +168,12 @@ export class SocketService {
                     "/vendor/mac.noindex/terminal-notifier.app/Contents/MacOS/terminal-notifier"
                 );
 
+            //console.log(message.handle);
             const notificationData: any = {
-                appId: "com.BlueBubbles.BlueBubbles-Desktop",
+                appID: "com.BlueBubbles.BlueBubbles-Desktop",
                 id: message.guid,
                 title: chatTitle,
-                icon: path.join(FileSystem.resources, "logo64.png"),
-                customPath
+                icon: path.join(FileSystem.resources, "icon256.png"),
             };
 
             // Don't show a notificaiton if they have been disabled
@@ -160,6 +191,14 @@ export class SocketService {
                 notificationData.reply = true;
                 notificationData.actions = "Reply";
                 notificationData.closeLabel = "Close";
+                notificationData.icon = null;
+
+                // if we have a handle and avatar, then show it in the notification
+                if (message.handle !== null && message.handle.avatar !== null) {
+                    // if avatar doesn't exist, it will treat it as null and have no picture
+                    let avatarPath = path.join(FileSystem.resources, 'contacts', `${message.handleId}.jpeg`);
+                    notificationData.icon = avatarPath;
+                }
             }
 
             // Don't show a notification if there is no error or it's from me
@@ -277,6 +316,7 @@ export class SocketService {
         return new Promise<ChatResponse[]>((resolve, reject) => {
             this.server.emit("get-chats", { withParticipants }, (res: ResponseFormat) => {
                 if ([200, 201].includes(res.status)) {
+                    console.log(res.data);
                     resolve(res.data as ChatResponse[]);
                 } else {
                     reject(res.message);

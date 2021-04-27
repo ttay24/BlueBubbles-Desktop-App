@@ -71,6 +71,7 @@ export type HandleResponse = {
     address: string;
     country: string;
     uncanonicalizedId: string;
+    avatar: string; // not sure if this exists?
 };
 
 export type ChatResponse = {
